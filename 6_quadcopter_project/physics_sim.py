@@ -36,6 +36,7 @@ class PhysicsSim():
         self.dt = 1 / 50.0  # Timestep
         self.C_d = 0.3
         self.l_to_rotor = 0.4
+        self.T_q = 0.1  # Thrust to torque ratio. Probably not actually linear... But, let's just go with it.
         self.propeller_size = 0.1
         width, length, height = .51, .51, .235
         self.dims = np.array([width, length, height])  # x, y, z dimensions of quadcopter
@@ -53,9 +54,10 @@ class PhysicsSim():
 
     def reset(self):
         self.time = 0.0
-        self.pose = np.array([0.0, 0.0, 10.0, 0.0, 0.0, 0.0]) if self.init_pose is None else self.init_pose
-        self.v = np.array([0.0, 0.0, 0.0]) if self.init_velocities is None else self.init_velocities
-        self.angular_v = np.array([0.0, 0.0, 0.0]) if self.init_angle_velocities is None else self.init_angle_velocities
+        self.rotor_speeds = np.zeros(4)
+        self.pose = np.array([0.0, 0.0, 10.0, 0.0, 0.0, 0.0]) if self.init_pose is None else np.copy(self.init_pose)
+        self.v = np.array([0.0, 0.0, 0.0]) if self.init_velocities is None else np.copy(self.init_velocities)
+        self.angular_v = np.array([0.0, 0.0, 0.0]) if self.init_angle_velocities is None else np.copy(self.init_angle_velocities)
         self.linear_accel = np.array([0.0, 0.0, 0.0])
         self.angular_accels = np.array([0.0, 0.0, 0.0])
         self.prop_wind_speed = np.array([0., 0., 0., 0.])
@@ -83,9 +85,10 @@ class PhysicsSim():
         return linear_forces
 
     def get_moments(self, thrusts):
-        thrust_moment = np.array([(thrusts[3] - thrusts[2]) * self.l_to_rotor,
-                            (thrusts[1] - thrusts[0]) * self.l_to_rotor,
-                            0])# (thrusts[2] + thrusts[3] - thrusts[0] - thrusts[1]) * self.T_q])  # Moment from thrust
+
+        thrust_moment = np.array([(thrusts[0] + thrusts[3] - thrusts[1] - thrusts[2]) * self.l_to_rotor,
+                                  (thrusts[2] + thrusts[3] - thrusts[0] - thrusts[1]) * self.l_to_rotor,
+                                  (thrusts[0] + thrusts[2] - thrusts[1] - thrusts[3]) * self.T_q])
 
         drag_moment =  self.C_d * 0.5 * self.rho * self.angular_v * np.absolute(self.angular_v) * self.areas * self.dims * self.dims
         moments = thrust_moment - drag_moment # + motor_inertia_moment
@@ -103,7 +106,7 @@ class PhysicsSim():
             perpendicular_speed = speeds[num] + body_velocity
             self.prop_wind_speed[num] = perpendicular_speed[2]
 
-    def get_propeler_thrust(self, rotor_speeds):
+    def get_propeller_thrust(self, rotor_speeds):
         '''calculates net thrust (thrust - drag) based on velocity
         of propeller and incoming power'''
         thrusts = []
@@ -113,13 +116,14 @@ class PhysicsSim():
             n = rotor_speeds[prop_number]
             J = V / n * D
             # From http://m-selig.ae.illinois.edu/pubs/BrandtSelig-2011-AIAA-2011-1255-LRN-Propellers.pdf
-            C_T = max(.12 - .07*max(0, J)-.1*max(0, J)**2, 0)
+            C_T = max(0.12 - 0.07*max(0.0, J)-.1*max(0.0, J)**2, 0.0)
             thrusts.append(C_T * self.rho * n**2 * D**4)
         return thrusts
 
     def next_timestep(self, rotor_speeds):
+        self.rotor_speeds = rotor_speeds
         self.calc_prop_wind_speed()
-        thrusts = self.get_propeler_thrust(rotor_speeds)
+        thrusts = self.get_propeller_thrust(rotor_speeds)
         self.linear_accel = self.get_linear_forces(thrusts) / self.mass
 
         position = self.pose[:3] + self.v * self.dt + 0.5 * self.linear_accel * self.dt**2
